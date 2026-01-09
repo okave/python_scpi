@@ -1,28 +1,44 @@
+# import pyvisa
 import time
-import pymodbus.client
-# from pymodbus.client.sync import ModbusSerialClient
-# from pymodbus.client import ModbusSerialClient
-from pymodbus.client.serial import ModbusSerialClient
+from geraete import classes,IDs
+import csv
+from datetime import datetime
 
-unidAddr = 11
+# shunt_resistance = 0.0001  # Ohm
 
-#client = ModbusClient(method='ascii', port='/dev/ttyUSB0', baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
-client = ModbusSerialClient(port='/dev/ttyUSB0', baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
+dmm = classes.rigol_dmm(IDs.RIGOL_DMM_IP)
+dmm.setup()
+# ps = classes.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
+# ps.setup()
+# el = classes.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
+# el.setup()
 
-client.connect()
+# ps.write_scpi("curr ")  # invalid command
+# el.set_volt(24)  # invalid command
+time.sleep(0.5)
 
-while True:
-              #read=client.read_input_registers(address = 10, count = 7, unit=unidAddr) 
-              read=client.read_holding_registers(address = 6, count = 22, device_id=unidAddr) 
-              if not read.isError():
-                            s = ''
-                            for r in read.registers:
-                                          s+=f"{r:6d} "
-                            print(s)
-                            time.sleep(0.5)
-              #for data in read.registers:
-              #            print(data) #printing value read in above line
+tests = [
+    '0,"No error"',
+    '0 - No error',
+    '-200,"Execution error"',
+    '-200 - Execution error',
+    '-200-Execution error',
+    '-222 Data out of range',
+    '0,"No error"',
+    "0,No error",
+    "0 - No error",
+    "   0 - No error   ",
+    '-200,"Execution error"',
+    "-200,Execution error",
+    "-200 - Execution error", 
+    "-200-Execution error",
+    "-222 Data out of range",
+    # Nur Code (kommt selten vor, aber besser robust sein)
+    "-113",
+    # +Code (auch selten, aber parser kann's)
+    "+100,Something"
 
-              else:
-                            print("error: {}".format(read))
-                            exit()     
+]
+
+# for t in tests:
+    # print(t, "->", parse_scpi_error(t))
