@@ -4,15 +4,16 @@ from dataclasses import dataclass
 import re
 
 _SCPI_ERROR_RE = re.compile(
+    """ Regex for parsing various formats of SCPI error responses."""
     r"""
-    ^\s* # Anfang, beliebig viel Whitespace
-    (?P<code>[+-]?\d+)  # Fehlercode, vorangestelltes +,- oder nichts davon, eine oder mehrere Ziffern
-    \s* # beliebig viel Whitespace
-    (?:[,:\-]\s*|\s+)? # Trenner: , oder : oder - mit beliebig viel Whitespace drumrum, oder einfach nur Whitespace, separator optional
-    (?P<msg>.*) # Fehlermeldung bis zum Ende, inklusive Leerzeichen
-    $ # Ende
-    """, # 
-    re.VERBOSE
+    ^\s* # Beginning, variable amount of whitespace
+    (?P<code>[+-]?\d+)  # Errorcode, leading +,- or none followed by one or more digits
+    \s* # variable amount of whitespace
+    (?:[,:\-]\s*|\s+)? # Separator: , or : or - with variable amount of whitespace around it, or just whitespace, separator optional
+    (?P<msg>.*) # Error message until end, including spaces
+    $ # End
+    """, 
+    re.VERBOSE # Allow verbose regex with comments
 )
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class SCPIErrorEntry:
 
 class SCPIError(Exception):
     """
-    Exception, die eine komplette SCPI-Error-Queue enthält.
+    Class for SCPI errors returned by instruments.
     """
     def __init__(self, errors: list[SCPIErrorEntry], command: str | None = None):
         self.errors = errors
@@ -31,6 +32,7 @@ class SCPIError(Exception):
         super().__init__(self.format())
 
     def format(self) -> str:
+        """ Format the error message. """
         body = "; ".join(f"{e.code}: {e.message}" for e in self.errors)
         if self.command:
             return f'SCPI error after "{self.command}": {body}'
@@ -55,6 +57,13 @@ class SCPIError(Exception):
 #     return SCPIErrorEntry(code=code, message=msg)
 
 def parse_scpi_error(resp: str) -> SCPIErrorEntry | None:
+    """
+    Parse a SCPI error response string into a SCPIErrorEntry or None if no error. Uses regex for parsing.
+    :param resp: Description
+    :type resp: str
+    :return: SCPIErrorEntry or None if no error.
+    :rtype: SCPIErrorEntry | None
+    """
     resp = resp.strip()
     m = _SCPI_ERROR_RE.match(resp)
     if not m:

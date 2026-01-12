@@ -14,12 +14,26 @@ el = classes.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
 el.setup()    
 
 def run_test_cycle(
-        testpoints_ampere,
+        testpoints_ampere:list[float],
         dwell_s:float=3.0,
         sample_per_point:int=10,
         sample_interval_s:float=0.5,
         export_csv_path=None
     ):
+    """
+    Run a test cycle with given testpoints in ampere. Timestamp, set current, measured voltage and calculated current are recorded and returned. CSV Export ist possible. 
+    
+    :param testpoints_ampere: Testpoints in ampere limited to electronic load current limits. 
+    :type testpoints_ampere: list[float]
+    :param dwell_s: Time to dwell on each testpoint in seconds
+    :type dwell_s: float
+    :param sample_per_point: Number of samples to take per testpoint
+    :type sample_per_point: int
+    :param sample_interval_s: Time interval between samples in seconds
+    :type sample_interval_s: float
+    :param export_csv_path: Path to export CSV file, or None to skip export
+    :type export_csv_path: str | None
+    """
     results = []
     
     # Set electronic load to max power to avoid power limit issues
@@ -89,6 +103,24 @@ def run_sweep(
         volt_end:float=10,
         step_volt:float=1.0,
         export_csv_path=None):
+    """
+    Run sweep with given current and voltage ranges. If no value is given run standard sweep. Timestamp, set and measured values are recorded and returned. CSV Export ist possible.
+    
+    :param curr_start: Current start value in Ampere
+    :type curr_start: float
+    :param curr_end: Current end value in Ampere
+    :type curr_end: float
+    :param step_curr: Current step between two setpoints in Ampere
+    :type step_curr: float
+    :param volt_start: Voltage start value in Volt
+    :type volt_start: float
+    :param volt_end: Voltage end value in Volt
+    :type volt_end: float
+    :param step_volt: Voltage step between two setpoints in Volt
+    :type step_volt: float
+    :param export_csv_path: Path to export CSV file, or None to skip export
+    :type export_csv_path: str | None
+    """
     results = []
     testpoints_amp = []
     testpoints_volt = []
@@ -167,6 +199,7 @@ def run_sweep(
             writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
             writer.writerows(results)
+
     return results
         
     
