@@ -4,6 +4,16 @@ import pymodbus.client
 # from pymodbus.client import ModbusSerialClient
 from pymodbus.client.serial import ModbusSerialClient
 
+
+MbRegisterNames = ["U_stack",
+    "I_high1",
+    "I_low1",
+    "U_stack2",
+    "I_high2",
+    "I_low2",
+    "U_ocv",
+    "U_ocv2"]
+
 unidAddr = 11
 
 #client = ModbusClient(method='ascii', port='/dev/ttyUSB0', baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
@@ -12,17 +22,17 @@ client = ModbusSerialClient(port='COM10', baudrate=115200, bytesize=8, parity='N
 client.connect()
 
 while True:
-              #read=client.read_input_registers(address = 10, count = 7, unit=unidAddr) 
-              read=client.read_holding_registers(address = 6, count = 22, device_id=unidAddr) 
-              if not read.isError():
-                            s = ''
-                            for r in read.registers:
-                                          s+=f"{r:6d} "
-                            print(s)
-                            time.sleep(0.5)
-              #for data in read.registers:
-              #            print(data) #printing value read in above line
+    #read=client.read_input_registers(address = 10, count = 7, unit=unidAddr) 
+    read=client.read_holding_registers(address = 10, count = 8, device_id=unidAddr)
+    if not read.isError():
+        s = ''
+        for r in read.registers:
+                          s+=f"{MbRegisterNames[read.registers.index(r)]}: {r} "
+        print(s)
+        time.sleep(2)
+        #for data in read.registers:
+        #            print(data) #printing value read in above line
 
-              else:
-                            print("error: {}".format(read))
-                            exit()     
+    else:
+        print("error: {}".format(read))
+        exit()     

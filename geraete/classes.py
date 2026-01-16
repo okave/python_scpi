@@ -1,7 +1,7 @@
 import time
 import pyvisa
 from geraete.scpi_errors import SCPIError, SCPIErrorEntry, parse_scpi_error
-from pyvisa import MessageBasedResource
+from pyvisa.resources import MessageBasedResource
 
 
 class TcpScpiAppliance:
@@ -20,23 +20,18 @@ class TcpScpiAppliance:
         :param resource_template: Template for the resource string. If None, a default TCPIP template is used.
         :type resource_template: str | None
         """
-#TODO: Check if works
-        self.inst: MessageBasedResource
         rm = pyvisa.ResourceManager('@py')
         if resource_template:
             resource = resource_template.format(ip=ip,port=port)
         else:
             resource = f"TCPIP::{ip}::{port}::SOCKET"
         print("Opening Connection...")
-# TODO: Check if works as intended with resource_pyclass
         try:
-            if resource_template:
-                self.inst = rm.open_resource(resource_name=resource,resource_pyclass=pyvisa.resources.TCPIPInstrument) 
-            self.inst = rm.open_resource(resource_name=resource, resource_pyclass=pyvisa.resources.TCPIPSocket) # defeats the purpose? 
+            self.inst = rm.open_resource(resource)
         except Exception as exc:
             raise ConnectionError(f"SCPI connect failed: {resource}") from exc
         self.inst.timeout = 5000
-        self.inst.write_termination = '\n' 
+        self.inst.write_termination = '\n'
         self.inst.read_termination = '\n'
 
 
@@ -257,6 +252,6 @@ class rigol_dmm(TcpScpiAppliance):
             "scpi_vers": self.query_scpi("SYSTem:VERSion?")
         }
     
-    def _query_error_line(self) -> str:
+    def query_error_line(self) -> str:
         """ Return the next error line from the SCPI error queue """
         return self.inst.query("SYST:ERR?")

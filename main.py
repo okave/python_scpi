@@ -1,5 +1,6 @@
 # import pyvisa
 import time
+import argparse
 from geraete import classes,IDs
 import csv
 from datetime import datetime
@@ -12,6 +13,14 @@ ps = classes.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
 ps.setup()
 el = classes.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
 el.setup()    
+
+def output_off_zero():
+    """ Turn off all appliances safely. """
+    ps.write_scpi("OUTP OFF")
+    time.sleep(5) # wait for power supply to discharge
+    el.write_scpi("INP OFF")
+    ps.preset_zero()
+    el.preset_zero()
 
 def run_test_cycle(
         testpoints_ampere:list[float],
@@ -82,11 +91,7 @@ def run_test_cycle(
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
 
-    ps.write_scpi("OUTP OFF")
-    time.sleep(5) # wait for power supply to discharge
-    el.write_scpi("INP OFF")
-    ps.preset_zero()
-    el.preset_zero()
+    output_off_zero()
     if export_csv_path:
         fieldnames = ["timestamp", "set_current_a", "meas_voltage_v", "calc_current_a"]
         with open(export_csv_path, "w", newline="") as handle:
@@ -124,10 +129,10 @@ def run_sweep(
     results = []
     testpoints_amp = []
     testpoints_volt = []
-
+    first = True
     set_curr_el = el.set_curr(curr_end)
-    set_pow_el = el.set_pow(2400)
-    set_pow_ps = ps.set_pow(2400)
+    set_pow_el = el.set_pow(el.POW_MAX)
+    set_pow_ps = ps.set_pow(el.POW_MAX)
 
     current = curr_start
     if curr_start < 0:
@@ -153,8 +158,15 @@ def run_sweep(
     else:
         testpoints_volt.append(round(volt_start, 2))
 
+    
+
     for a_setpoint in testpoints_amp:
         set_curr_ps = ps.set_curr(a_setpoint)
+        if first:
+            time.sleep(1)
+            el.write_scpi("INP ON")
+            ps.write_scpi("OUTP ON")
+            first = False
         for v_setpoint in testpoints_volt:
             # power = a_setpoint * v_setpoint + 20
             # if power > el.POW_MAX:
@@ -182,11 +194,8 @@ def run_sweep(
                 "meas_pow_el": el.meas_pow(),
             }
             results.append(row)
-    ps.write_scpi("OUTP OFF")
-    time.sleep(5) # wait for power supply to discharge
-    el.write_scpi("INP OFF")
-    ps.preset_zero()
-    el.preset_zero()
+            print(f"sweep in progress | {ts} | I_set {a_setpoint:.2f} A | U_set = {set_volt_ps:.7f} V")
+    output_off_zero()
     if export_csv_path:
         fieldnames = [
             "timestamp",
@@ -201,68 +210,88 @@ def run_sweep(
             writer.writerows(results)
 
     return results
-        
-    
+            
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="SCPI Test- und Sweep-Tool"
+    )
+
+    subparsers = parser.add_subparsers(dest="mode", required=True)
+
+    # -------- Sweep --------
+    sweep = subparsers.add_parser("sweep", help="Strom/Spannungs-Sweep")
+    sweep.add_argument("--curr-start", type=float, default=0)
+    sweep.add_argument("--curr-end", type=float, default=120)
+    sweep.add_argument("--step-curr", type=float, default=20)
+    sweep.add_argument("--volt-start", type=float, default=40)
+    sweep.add_argument("--volt-end", type=float, default=40)
+    sweep.add_argument("--step-volt", type=float, default=0)
+
+    # -------- Test Cycle --------
+    cycle = subparsers.add_parser("cycle", help="Testzyklus")
+    cycle.add_argument(
+        "--testpoints",
+        type=float,
+        nargs="+",
+        required=True,
+        help="Strom-Testpunkte in Ampere"
+    )
+    cycle.add_argument("--dwell", type=float, default=3.0)
+    cycle.add_argument("--samples", type=int, default=10)
+    cycle.add_argument("--interval", type=float, default=0.5)
+
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
+
     dmm.write_scpi("MEAS MANU")
     dmm.write_scpi("MEAS:VOLT:DC 0")
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     try:
+        if args.mode == "cycle":
+            run_test_cycle(
+                testpoints_ampere=args.testpoints,
+                dwell_s=args.dwell,
+                sample_per_point=args.samples,
+                sample_interval_s=args.interval,
+                export_csv_path=f"test_cycle_results_{timestamp}.csv"
+            )
+        elif args.mode == "sweep":
+            run_sweep(
+                curr_start=args.curr_start,
+                curr_end=args.curr_end,
+                step_curr=args.step_curr,
+                volt_start=args.volt_start,
+                volt_end=args.volt_end,
+                step_volt=args.step_volt,
+                export_csv_path=f"sweep_{timestamp}.csv"
+            )
         # run_test_cycle(
-        #     testpoints_ampere=[10, 20, 30, 40],
+        #     testpoints_ampere=[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
         #     dwell_s=2.0,
         #     sample_per_point=3,
-        #     sample_interval_s=1.0,
-        #     export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        #     sample_interval_s=3.0,
+        #     # export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         # )
-        run_sweep(
-            curr_start=0,
-            curr_end=120,
-            step_curr=20,
-            volt_start=40,
-            volt_end=40,
-            step_volt=0,
-            export_csv_path=f"sweep_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        )
+        # run_sweep(
+        #     curr_start=0,
+        #     curr_end=120,
+        #     step_curr=20,
+        #     volt_start=40,
+        #     volt_end=40,
+        #     step_volt=0,
+        #     export_csv_path=f"sweep_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # )
     finally:
-        ps.write_scpi("OUTP OFF")
-        ps.preset_zero()
+        output_off_zero()
         time.sleep(1)
         ps.close()
-        time.sleep(5) # wait for power supply to discharge
-        el.write_scpi("INP OFF")
-        el.preset_zero()
-        time.sleep(1)
         el.close()
         dmm.close()
 
-'''''       
-    # print("Set Power:", el.set_pow(100))
-    # el.write_scpi("INP ON")
-
-    # print("Set Current:", ps.set_curr(1))
-    # print("Set Voltage:", ps.set_volt(40))
-    # print("Set Power:", ps.set_pow(100))
-    # ps.write_scpi("OUTP ON")
-    # i = 0
-
-    # for i in range(10):
-    #     meas_volt = dmm.query_scpi("MEAS:VOLT:DC?")
-    #     calc_curr = float(meas_volt)*shunt_resistance
-    #     print("Voltage:", meas_volt)
-    #     print("Current:", calc_curr)
-    #     time.sleep(1)
-    #     i += 1 
-
-    while True:
-        meas_volt = dmm.meas_volt_dc()
-        calc_curr = float(meas_volt)/shunt_resistance
-        print(f"Voltage: {float(meas_volt):.7f} V")
-        print(f"Voltage: {float(meas_volt)*1000:.3f} mV")
-        print(f"Current: {calc_curr:.4f} A")
-        time.sleep(3)
-'''
 
 
 if __name__ == "__main__":
