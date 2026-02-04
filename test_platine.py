@@ -1,8 +1,10 @@
 import time
+from numpy import int16
 import pymodbus.client
 # from pymodbus.client.sync import ModbusSerialClient
 # from pymodbus.client import ModbusSerialClient
 from pymodbus.client.serial import ModbusSerialClient
+from pcb_constants import PCB_MODBUS_PARAMETERS, PCB_MB_REGISTERS, PCB_REG_NAME_TO_ADDRESS, PCB_REG_ADRESS_TO_NAME
 
 
 MbRegisterNames = ["U_stack",
@@ -14,24 +16,50 @@ MbRegisterNames = ["U_stack",
     "U_ocv",
     "U_ocv2"]
 
-unidAddr = 11
+unidAddr = 10
+mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
+mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
+mb_reg_count = mb_reg_end - mb_reg_start + 1
 
 #client = ModbusClient(method='ascii', port='/dev/ttyUSB0', baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
 client = ModbusSerialClient(port='COM10', baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
 
 client.connect()
+if client.connected:
+    print("Modbus connected")
 
 while True:
-    #read=client.read_input_registers(address = 10, count = 7, unit=unidAddr) 
-    read=client.read_holding_registers(address = 10, count = 8, device_id=unidAddr)
-    if not read.isError():
-        s = ''
-        for r in read.registers:
-                          s+=f"{MbRegisterNames[read.registers.index(r)]}: {r} "
-        print(s)
+    # client.write_registers(50, [0,1,2,3,4,5,6,7,8,9], device_id=unidAddr)  # Beispiel: Schreibe 1 in Register 50 und 0 in Register 51
+    # read = client.read_holding_registers(address=50, count=10, device_id=unidAddr)
+    # if not read.isError():
+    #     for r in read.registers:
+    #         print(r)
+    #     time.sleep(2)
+    # client.write_registers(50, [9,8,7,6,5,4,3,2,1,0], device_id=unidAddr)  
+    # read = client.read_holding_registers(address=50, count=10, device_id=unidAddr)
+    # if not read.isError():
+    #     for r in read.registers:
+    #         print(r)
+    #     time.sleep(2)
+
+    read_reg_values = client.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=unidAddr)
+    if not read_reg_values.isError():
+        values = read_reg_values.registers
+        for address in range(mb_reg_start, mb_reg_end + 1):
+            reg_name = PCB_REG_ADRESS_TO_NAME[address]
+            reg_value = float(int16(values[address - mb_reg_start]))
+            print(f"Register {reg_name} (Addr {address}): {reg_value}")
         time.sleep(2)
-        #for data in read.registers:
-        #            print(data) #printing value read in above line
+
+    # read=client.read_holding_registers(address = 11, count = 8, device_id=unidAddr)
+    # if not read.isError():
+    #     s = ''
+    #     for r in read.registers:
+    #                       s+=f"{MbRegisterNames[read.registers.index(r)]}: {r} "
+    #     print(s)
+    #     time.sleep(2)
+    #     for data in read.registers:
+    #                print(data) #printing value read in above line
 
     else:
         print("error: {}".format(read))

@@ -1,9 +1,15 @@
+"""
+TODO: Übergabe der Grenzwerte aus IDs.py implementieren.
+"""
+
 # import pyvisa
 import time
 import argparse
 from geraete import classes,IDs
 import csv
 from datetime import datetime
+from pymodbus.client.serial import ModbusSerialClient
+from pcb_constants import PCB_MODBUS_PARAMETERS, PCB_MB_REGISTERS, PCB_REG_NAME_TO_ADDRESS, PCB_REG_ADRESS_TO_NAME, PCB_NAME_MULT
 
 shunt_resistance = 0.0001  # Ohm
 
@@ -12,7 +18,16 @@ dmm.setup()
 ps = classes.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
 ps.setup()
 el = classes.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
-el.setup()    
+el.setup()
+pcbClient = ModbusSerialClient(
+    port=PCB_MODBUS_PARAMETERS['USBPort'], 
+    baudrate=PCB_MODBUS_PARAMETERS['baudrate'], 
+    bytesize=PCB_MODBUS_PARAMETERS['bytesize'], 
+    parity=PCB_MODBUS_PARAMETERS['parity'], 
+    stopbits=PCB_MODBUS_PARAMETERS['stopbits'], 
+    timeout=PCB_MODBUS_PARAMETERS['timeout']
+    )
+pcbClient.connect()
 
 def output_off_zero():
     """ Turn off all appliances safely. """
@@ -28,7 +43,7 @@ def run_test_cycle(
         sample_per_point:int=10,
         sample_interval_s:float=0.5,
         export_csv_path=None
-    ):
+    ): 
     """
     Run a test cycle with given testpoints in ampere. Timestamp, set current, measured voltage and calculated current are recorded and returned. CSV Export ist possible. 
     
@@ -44,13 +59,16 @@ def run_test_cycle(
     :type export_csv_path: str | None
     """
     results = []
-    
+    mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
+    mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
+    mb_reg_count = mb_reg_end - mb_reg_start + 1
+
     # Set electronic load to max power to avoid power limit issues
-    set_curr_el = el.set_curr(el.CURR_MAX)
-    set_pow_el = el.set_pow(el.POW_MAX)
+    el.set_curr(el.CURR_MAX)
+    el.set_pow(el.POW_MAX)
     # Set power supply to max power to avoid power limit issues
-    set_volt_ps = ps.set_volt(ps.VOLT_MAX)
-    set_pow_ps = ps.set_pow(ps.POW_MAX)
+    ps.set_volt(ps.VOLT_MAX)
+    ps.set_pow(ps.POW_MAX)
 
 
     for set_current in testpoints_ampere:
@@ -59,18 +77,6 @@ def run_test_cycle(
         if set_current < 0 or set_current > el.CURR_MAX:
             set_current = 0 if set_current < 0 else el.CURR_MAX
         ps.set_curr(set_current)
-        # ps.set_volt(ps.VOLT_MAX)
-        # if set_current * ps.VOLT_MAX + 20 > el.POW_MAX:
-        #     ps.set_pow(el.POW_MAX)
-        # else:
-        #     ps.set_pow(set_current*ps.VOLT_MAX+20)
-        
-        # el.set_curr(set_current)
-        # if set_current * el.VOLT_MAX + 20 > el.POW_MAX:
-        #     el.set_pow(el.POW_MAX)
-        # else:
-        #     el.set_pow(set_current*el.VOLT_MAX+20)
-         # wait for settings to be safe
         if first:
             time.sleep(1)
             el.write_scpi("INP ON")
@@ -85,8 +91,11 @@ def run_test_cycle(
             values = read_reg_values.registers
             modbus_values = {}
             for address in range(mb_reg_start, mb_reg_end + 1):
-                reg_name = PCB_REG_ADRESS_TO_NAME[address]
-                reg_value = values[address - mb_reg_start]
+                reg_mult = PCB_MB_REGISTERS[address].get("multiplicator")
+                reg_name = PCB_MB_REGISTERS[address].get("name")
+                # reg_name = PCB_REG_ADRESS_TO_NAME[address]
+                reg_value = values[address - mb_reg_start]*reg_mult
+                # reg_value = values[address - mb_reg_start]
                 modbus_values[reg_name] = reg_value
                 # print(f"Register {reg_name} (Addr {address}): {reg_value}")
 
@@ -104,6 +113,7 @@ def run_test_cycle(
     output_off_zero()
     if export_csv_path:
         fieldnames = ["timestamp", "set_current_a", "meas_voltage_v", "calc_current_a"]
+        fieldnames.extend(modbus_values.keys())
         with open(export_csv_path, "w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
@@ -252,8 +262,11 @@ def parse_args():
 
     return parser.parse_args()
 
+def values_to_pcb():
+    return 0
+
 def main():
-    args = parse_args()
+    # args = parse_args()
 
     dmm.write_scpi("MEAS MANU")
     dmm.write_scpi("MEAS:VOLT:DC 0")
@@ -261,31 +274,33 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     try:
-        if args.mode == "cycle":
+        # if args.mode == "cycle":
+        #     run_test_cycle(
+        #         testpoints_ampere=args.testpoints,
+        #         dwell_s=args.dwell,
+        #         sample_per_point=args.samples,
+        #         sample_interval_s=args.interval,
+        #         export_csv_path=f"test_cycle_results_{timestamp}.csv"
+        #     )
+        # elif args.mode == "sweep":
+        #     run_sweep(
+        #         curr_start=args.curr_start,
+        #         curr_end=args.curr_end,
+        #         step_curr=args.step_curr,
+        #         volt_start=args.volt_start,
+        #         volt_end=args.volt_end,
+        #         step_volt=args.step_volt,
+        #         export_csv_path=f"sweep_{timestamp}.csv"
+        #     )
+            # """
             run_test_cycle(
-                testpoints_ampere=args.testpoints,
-                dwell_s=args.dwell,
-                sample_per_point=args.samples,
-                sample_interval_s=args.interval,
-                export_csv_path=f"test_cycle_results_{timestamp}.csv"
-            )
-        elif args.mode == "sweep":
-            run_sweep(
-                curr_start=args.curr_start,
-                curr_end=args.curr_end,
-                step_curr=args.step_curr,
-                volt_start=args.volt_start,
-                volt_end=args.volt_end,
-                step_volt=args.step_volt,
-                export_csv_path=f"sweep_{timestamp}.csv"
-            )
-        # run_test_cycle(
-        #     testpoints_ampere=[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
-        #     dwell_s=2.0,
-        #     sample_per_point=3,
-        #     sample_interval_s=3.0,
-        #     # export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        # )
+            testpoints_ampere=[10, 20],
+            # testpoints_ampere=[0, 40, 80, 120],
+            dwell_s=2.0,
+            sample_per_point=3,
+            sample_interval_s=3.0,
+            export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
         # run_sweep(
         #     curr_start=0,
         #     curr_end=120,
@@ -295,6 +310,8 @@ def main():
         #     step_volt=0,
         #     export_csv_path=f"sweep_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         # )
+            # """
+        
     finally:
         output_off_zero()
         time.sleep(1)
