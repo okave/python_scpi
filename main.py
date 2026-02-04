@@ -81,12 +81,22 @@ def run_test_cycle(
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             meas_volt = dmm.meas_volt_dc()
             calc_curr = meas_volt / shunt_resistance
+            read_reg_values = pcbClient.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=PCB_MODBUS_PARAMETERS['devId'])
+            values = read_reg_values.registers
+            modbus_values = {}
+            for address in range(mb_reg_start, mb_reg_end + 1):
+                reg_name = PCB_REG_ADRESS_TO_NAME[address]
+                reg_value = values[address - mb_reg_start]
+                modbus_values[reg_name] = reg_value
+                # print(f"Register {reg_name} (Addr {address}): {reg_value}")
+
             row = {
                 "timestamp": ts,
                 "set_current_a": f"{set_current:.2f}",
                 "meas_voltage_v": f"{meas_volt:.7f}",
                 "calc_current_a": f"{calc_curr:.7f}",
             }
+            row.update(modbus_values)
             results.append(row)
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
