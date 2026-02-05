@@ -5,13 +5,21 @@ TODO: Übergabe der Grenzwerte aus IDs.py implementieren.
 # import pyvisa
 import time
 import argparse
+
+from numpy import int16, uint16
 from geraete import classes,IDs
 import csv
 from datetime import datetime
 from pymodbus.client.serial import ModbusSerialClient
-from pcb_constants import PCB_MODBUS_PARAMETERS, PCB_MB_REGISTERS, PCB_REG_NAME_TO_ADDRESS, PCB_REG_ADRESS_TO_NAME, PCB_NAME_MULT
+from pcb_constants import PCB_MODBUS_PARAMETERS, PCB_MB_REGISTERS, PCB_PARAM, PCB_REG_NAME_TO_ADDRESS, PCB_REG_ADRESS_TO_NAME, PCB_NAME_MULT
 
-shunt_resistance = 0.0001  # Ohm
+hw_variants = [
+    "S1_Pos",
+    "S1_Neg",
+    "S2_Pos", 
+    "S2_Neg",
+]
+
 
 dmm = classes.rigol_dmm(IDs.RIGOL_DMM_IP)
 dmm.setup()
@@ -29,6 +37,35 @@ pcbClient = ModbusSerialClient(
     )
 pcbClient.connect()
 
+def float_to_uint16(value: float) -> uint16:
+    if value >= 0:
+        x = round(value/(PCB_PARAM["RANGE"]/(PCB_PARAM["ADC_RES_HALF"]-1)))
+    else:
+        x = (value + 2*PCB_PARAM["RANGE"]) / (PCB_PARAM["RANGE"]/PCB_PARAM["ADC_RES_HALF"])    
+    x = uint16(x)
+    return x
+
+def wait_for_user_confirmation(message: str):
+    while True:
+        print("\n" + message)
+        answer = input("Please confirm switch configuration. [y/n]: ").strip().lower()
+        if answer == "y":
+            return
+        elif answer == "n":
+            print("Please change hardware configuration and confirm.")
+        else:
+            print("Invalid input. Please enter 'y' or 'n'.")
+
+def get_current_key(hw_variant:str, set_current:float) ->str:
+    if hw_variant.startswith("S1"):
+        stack = "S1"
+    elif hw_variant.startswith("S2"):
+        stack = "S2"
+    else:
+        raise ValueError(f"Invalid hw_variant: {hw_variant}")
+    level = "low" if set_current < 10.0 else "high"
+    return f"Current_{level}_{stack}"
+
 def output_off_zero():
     """ Turn off all appliances safely. """
     ps.write_scpi("OUTP OFF")
@@ -39,6 +76,7 @@ def output_off_zero():
 
 def run_test_cycle(
         testpoints_ampere:list[float],
+        hw_variant:str="S1_Pos",
         dwell_s:float=3.0,
         sample_per_point:int=10,
         sample_interval_s:float=0.5,
@@ -59,9 +97,11 @@ def run_test_cycle(
     :type export_csv_path: str | None
     """
     results = []
+    ref_values = []
     mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
     mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
     mb_reg_count = mb_reg_end - mb_reg_start + 1
+    first = True
 
     # Set electronic load to max power to avoid power limit issues
     el.set_curr(el.CURR_MAX)
@@ -69,11 +109,16 @@ def run_test_cycle(
     # Set power supply to max power to avoid power limit issues
     ps.set_volt(ps.VOLT_MAX)
     ps.set_pow(ps.POW_MAX)
+    
 
-
-    for set_current in testpoints_ampere:
-        first = True
-        # Last gibt Maximalwerte vor
+    for set_current in testpoints_ampere:  
+        
+        current_key = get_current_key(hw_variant, set_current)
+        samples = {
+           "calc_current_a": [],
+            current_key: [] 
+        }  
+        # load defines maximum current
         if set_current < 0 or set_current > el.CURR_MAX:
             set_current = 0 if set_current < 0 else el.CURR_MAX
         ps.set_curr(set_current)
@@ -86,18 +131,15 @@ def run_test_cycle(
         for _ in range(sample_per_point):
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             meas_volt = dmm.meas_volt_dc()
-            calc_curr = meas_volt / shunt_resistance
+            calc_curr = meas_volt / PCB_PARAM["R_SHUNT"]
             read_reg_values = pcbClient.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=PCB_MODBUS_PARAMETERS['devId'])
             values = read_reg_values.registers
             modbus_values = {}
             for address in range(mb_reg_start, mb_reg_end + 1):
                 reg_mult = PCB_MB_REGISTERS[address].get("multiplicator")
                 reg_name = PCB_MB_REGISTERS[address].get("name")
-                # reg_name = PCB_REG_ADRESS_TO_NAME[address]
-                reg_value = values[address - mb_reg_start]*reg_mult
-                # reg_value = values[address - mb_reg_start]
+                reg_value = int16(uint16(values[address - mb_reg_start]))*reg_mult # type: ignore
                 modbus_values[reg_name] = reg_value
-                # print(f"Register {reg_name} (Addr {address}): {reg_value}")
 
             row = {
                 "timestamp": ts,
@@ -107,8 +149,18 @@ def run_test_cycle(
             }
             row.update(modbus_values)
             results.append(row)
+            samples["calc_current_a"].append(calc_curr)
+            samples[current_key].append(modbus_values[current_key])
+
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
+        
+        means = {k: sum(v)/len(v) for k, v in samples.items()}
+        ref_values.append(means)
+        print(f"Referenzwerte ({hw_variant}) @ {set_current:.2f} A:")
+        for k, v in means.items():
+            print(f"  {k}: {v:.6f}")
+
 
     output_off_zero()
     if export_csv_path:
@@ -118,7 +170,7 @@ def run_test_cycle(
             writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
             writer.writerows(results)
-    return results
+    return results, ref_values
 
 def run_sweep(
         curr_start:float=0,
@@ -262,8 +314,26 @@ def parse_args():
 
     return parser.parse_args()
 
-def values_to_pcb():
+def ref_to_pcb():
+    
     return 0
+
+def run_test_with_user_steps():
+
+    for run_index, variant in enumerate(hw_variants, start=1):
+        print(f"\n===== TESTCYCLE {run_index}/4 =====")
+
+        wait_for_user_confirmation(variant)
+
+        run_test_cycle(
+            testpoints_ampere=[10, 20],
+            hw_variant=variant,
+            dwell_s=2.0,
+            sample_per_point=3,
+            sample_interval_s=3.0,
+            export_csv_path=f"test_cycle_run_{hw_variants[run_index-1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+
 
 def main():
     # args = parse_args()
@@ -292,8 +362,11 @@ def main():
         #         step_volt=args.step_volt,
         #         export_csv_path=f"sweep_{timestamp}.csv"
         #     )
-            # """
-            run_test_cycle(
+        # """
+        
+        # run_test_with_user_steps()
+        
+        x,y = run_test_cycle(
             testpoints_ampere=[10, 20],
             # testpoints_ampere=[0, 40, 80, 120],
             dwell_s=2.0,
@@ -310,8 +383,14 @@ def main():
         #     step_volt=0,
         #     export_csv_path=f"sweep_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         # )
-            # """
+        # """
+        print(y)
         
+        # for r in y:
+        #     print(f"Referenzwerte @ {r} A:")
+        #     for k, v in y[r].items():
+        #         print(f"  {k}: {v:.6f}")
+
     finally:
         output_off_zero()
         time.sleep(1)

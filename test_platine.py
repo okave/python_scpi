@@ -1,5 +1,5 @@
 import time
-from numpy import int16
+from numpy import int16, uint16
 import pymodbus.client
 # from pymodbus.client.sync import ModbusSerialClient
 # from pymodbus.client import ModbusSerialClient
@@ -47,8 +47,10 @@ while True:
         values = read_reg_values.registers
         for address in range(mb_reg_start, mb_reg_end + 1):
             reg_name = PCB_REG_ADRESS_TO_NAME[address]
-            reg_value = float(int16(values[address - mb_reg_start]))
-            print(f"Register {reg_name} (Addr {address}): {reg_value}")
+            reg_mult = PCB_MB_REGISTERS[address].get("multiplicator")
+            reg_value = int16(uint16(values[address - mb_reg_start]))
+            reg_value = reg_value * reg_mult # type: ignore
+            print(f"Register {reg_name} (Addr {address})(Mult {reg_mult}): {reg_value:.4f}")
         time.sleep(2)
 
     # read=client.read_holding_registers(address = 11, count = 8, device_id=unidAddr)
@@ -62,5 +64,5 @@ while True:
     #                print(data) #printing value read in above line
 
     else:
-        print("error: {}".format(read))
+        print("error: {}".format(read_reg_values))
         exit()     
