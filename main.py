@@ -20,6 +20,7 @@ hw_variants = [
     "S2_Neg",
 ]
 
+CURRENT_SETPOINTS = []
 
 dmm = classes.rigol_dmm(IDs.RIGOL_DMM_IP)
 dmm.setup()
@@ -97,7 +98,8 @@ def run_test_cycle(
     :type export_csv_path: str | None
     """
     results = []
-    ref_values = []
+    pcb_mean_values = []
+    ref_mean_values = []
     mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
     mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
     mb_reg_count = mb_reg_end - mb_reg_start + 1
@@ -114,10 +116,12 @@ def run_test_cycle(
     for set_current in testpoints_ampere:  
         
         current_key = get_current_key(hw_variant, set_current)
-        samples = {
-           "calc_current_a": [],
-            current_key: [] 
-        }  
+        # samples = {
+        #    "calc_current_a": [],
+        #     current_key: [] 
+        # }
+        samples_pcb_current = []
+        samples_ref_current = []
         # load defines maximum current
         if set_current < 0 or set_current > el.CURR_MAX:
             set_current = 0 if set_current < 0 else el.CURR_MAX
@@ -149,19 +153,18 @@ def run_test_cycle(
             }
             row.update(modbus_values)
             results.append(row)
-            samples["calc_current_a"].append(calc_curr)
-            samples[current_key].append(modbus_values[current_key])
+            samples_ref_current.append(calc_curr)
+            samples_pcb_current.append(modbus_values[current_key])
 
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
         
-        means = {k: sum(v)/len(v) for k, v in samples.items()}
-        ref_values.append(means)
-        print(f"Referenzwerte ({hw_variant}) @ {set_current:.2f} A:")
-        for k, v in means.items():
-            print(f"  {k}: {v:.6f}")
+        means = my_mean(samples_ref_current)
+        ref_mean_values.append(means)
+        means = my_mean(samples_pcb_current)
+        pcb_mean_values.append(means)
 
-
+    ref_values = ref_mean_values + pcb_mean_values 
     output_off_zero()
     if export_csv_path:
         fieldnames = ["timestamp", "set_current_a", "meas_voltage_v", "calc_current_a"]
@@ -171,6 +174,9 @@ def run_test_cycle(
             writer.writeheader()
             writer.writerows(results)
     return results, ref_values
+
+def my_mean(values:list[float]) -> float:
+    return sum(values)/len(values) if values else 0.0
 
 def run_sweep(
         curr_start:float=0,
@@ -314,8 +320,8 @@ def parse_args():
 
     return parser.parse_args()
 
-def ref_to_pcb():
-    
+def ref_to_pcb(start_adress:int, values:list[uint16]):
+    pcbClient.write_registers(address=start_adress, values=values, device_id=PCB_MODBUS_PARAMETERS['devId'])
     return 0
 
 def run_test_with_user_steps():
@@ -370,10 +376,21 @@ def main():
             testpoints_ampere=[10, 20],
             # testpoints_ampere=[0, 40, 80, 120],
             dwell_s=2.0,
-            sample_per_point=3,
+            sample_per_point=1,
             sample_interval_s=3.0,
             export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
+        ref_values = []
+        for i in range(len(y)):
+            ref_values.append(float_to_uint16(y[i]))
+        
+        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], ref_values)
+        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], count=len(ref_values), device_id=PCB_MODBUS_PARAMETERS['devId'])
+        ref_values_read = ref_values_read.registers
+        print("Reference values written to PCB and read back:")
+        for i in range(len(ref_values)):
+            print(f"Ref {y[i]:.7f} A -> UInt16: {ref_values[i]} -> Read back: {ref_values_read[i]}")
+            
         # run_sweep(
         #     curr_start=0,
         #     curr_end=120,
@@ -384,8 +401,7 @@ def main():
         #     export_csv_path=f"sweep_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         # )
         # """
-        print(y)
-        
+                
         # for r in y:
         #     print(f"Referenzwerte @ {r} A:")
         #     for k, v in y[r].items():
