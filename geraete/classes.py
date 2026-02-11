@@ -252,6 +252,15 @@ class rigol_dmm(TcpScpiAppliance):
             "scpi_vers": self.query_scpi("SYSTem:VERSion?")
         }
     
+    def get_zero_offset(self, command:str, repeat: int, interval_s: float) -> float:
+        list = []
+        print(f"Measuring zero offset. Please wait approximately {repeat*interval_s+1 } seconds")
+        for i in range(repeat):
+            list.append(float(self.query_scpi(command)))
+            time.sleep(interval_s)
+        return sum(list)/len(list)
+
+
     def query_error_line(self) -> str:
         """ Return the next error line from the SCPI error queue """
         return self.inst.query("SYST:ERR?")

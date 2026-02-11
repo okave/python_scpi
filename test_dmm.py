@@ -1,7 +1,7 @@
 import pyvisa
 import time
 
-from geraete import ps, el, IDs
+# from geraete import ps, el, IDs
 # from geraete import el
 # from geraete import IDs
 

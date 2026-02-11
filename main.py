@@ -98,8 +98,7 @@ def run_test_cycle(
     :type export_csv_path: str | None
     """
     results = []
-    pcb_mean_values = []
-    ref_mean_values = []
+    pcb_and_ref_values = {}
     mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
     mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
     mb_reg_count = mb_reg_end - mb_reg_start + 1
@@ -112,14 +111,10 @@ def run_test_cycle(
     ps.set_volt(ps.VOLT_MAX)
     ps.set_pow(ps.POW_MAX)
     
+    zero_offset = dmm.get_zero_offset("MEAS:VOLT:DC?", repeat=5, interval_s=1)
 
     for set_current in testpoints_ampere:  
-        
         current_key = get_current_key(hw_variant, set_current)
-        # samples = {
-        #    "calc_current_a": [],
-        #     current_key: [] 
-        # }
         samples_pcb_current = []
         samples_ref_current = []
         # load defines maximum current
@@ -134,17 +129,16 @@ def run_test_cycle(
         time.sleep(dwell_s)
         for _ in range(sample_per_point):
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            meas_volt = dmm.meas_volt_dc()
+            meas_volt = dmm.meas_volt_dc() - zero_offset
             calc_curr = meas_volt / PCB_PARAM["R_SHUNT"]
             read_reg_values = pcbClient.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=PCB_MODBUS_PARAMETERS['devId'])
-            values = read_reg_values.registers
+            read_reg_values = read_reg_values.registers
             modbus_values = {}
             for address in range(mb_reg_start, mb_reg_end + 1):
                 reg_mult = PCB_MB_REGISTERS[address].get("multiplicator")
                 reg_name = PCB_MB_REGISTERS[address].get("name")
-                reg_value = int16(uint16(values[address - mb_reg_start]))*reg_mult # type: ignore
+                reg_value = int16(uint16(read_reg_values[address - mb_reg_start]))*reg_mult # type: ignore
                 modbus_values[reg_name] = reg_value
-
             row = {
                 "timestamp": ts,
                 "set_current_a": f"{set_current:.2f}",
@@ -159,12 +153,10 @@ def run_test_cycle(
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
         
-        means = my_mean(samples_ref_current)
-        ref_mean_values.append(means)
-        means = my_mean(samples_pcb_current)
-        pcb_mean_values.append(means)
+        mean_ref = my_mean(samples_ref_current)
+        mean_pcb = my_mean(samples_pcb_current)
+        pcb_and_ref_values[set_current] = [mean_pcb, mean_ref]      
 
-    ref_values = ref_mean_values + pcb_mean_values 
     output_off_zero()
     if export_csv_path:
         fieldnames = ["timestamp", "set_current_a", "meas_voltage_v", "calc_current_a"]
@@ -173,7 +165,7 @@ def run_test_cycle(
             writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
             writer.writerows(results)
-    return results, ref_values
+    return results, pcb_and_ref_values
 
 def my_mean(values:list[float]) -> float:
     return sum(values)/len(values) if values else 0.0
@@ -325,21 +317,36 @@ def ref_to_pcb(start_adress:int, values:list[uint16]):
     return 0
 
 def run_test_with_user_steps():
-
+    ref_values_stack1 = {}
+    ref_values_stack2 = {}
     for run_index, variant in enumerate(hw_variants, start=1):
         print(f"\n===== TESTCYCLE {run_index}/4 =====")
-
         wait_for_user_confirmation(variant)
-
-        run_test_cycle(
-            testpoints_ampere=[10, 20],
+        _, ref_values = run_test_cycle(
+            testpoints_ampere=[0, 40, 80, 120],
             hw_variant=variant,
             dwell_s=2.0,
-            sample_per_point=3,
-            sample_interval_s=3.0,
+            sample_per_point=2,
+            sample_interval_s=1.0,
             export_csv_path=f"test_cycle_run_{hw_variants[run_index-1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
+        if run_index % 2 == 0:
+            ref_values_corr = {}
+            for i, pair in ref_values.items():
+                if i == 0.0:
+                    continue
+                ref_values_corr[-i] = [pair[0], pair[1]]
+            ref_values = ref_values_corr
+        ref_values_stack1.update(ref_values) if "S1" in variant else ref_values_stack2.update(ref_values)
+    return ref_values_stack1, ref_values_stack2
 
+def refs_sorted_to_u16_list(refs_signed: dict) -> list[uint16]:
+    out: list[uint16] = []
+    for set_i in sorted(refs_signed.keys()):
+        ref_mean, pcb_mean = refs_signed[set_i]
+        out.append(float_to_uint16(ref_mean))
+        out.append(float_to_uint16(pcb_mean))
+    return out
 
 def main():
     # args = parse_args()
@@ -369,28 +376,42 @@ def main():
         #         export_csv_path=f"sweep_{timestamp}.csv"
         #     )
         # """
+        value_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=PCB_MODBUS_PARAMETERS['devId'])
+        print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
+        ref_values_stack1, ref_values_stack2 = run_test_with_user_steps()
+        ref_values_stack1_u16 = refs_sorted_to_u16_list(ref_values_stack1)
+        ref_values_stack2_u16 = refs_sorted_to_u16_list(ref_values_stack2)
+        print("Reference values stack 1 (u16):", ref_values_stack1_u16)
+        print("Reference values stack 2 (u16):", ref_values_stack2_u16)
+
         
-        # run_test_with_user_steps()
+        # x,y = run_test_cycle(
+        #     testpoints_ampere=[10, 20],
+        #     # testpoints_ampere=[0, 40, 80, 120],
+        #     dwell_s=2.0,
+        #     sample_per_point=1,
+        #     sample_interval_s=3.0,
+        #     export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # )
+        # print(y)
+        # ref_values = []
+        # for i in range(len(y)):
+        #     ref_values.append(float_to_uint16(y[i]))
         
-        x,y = run_test_cycle(
-            testpoints_ampere=[10, 20],
-            # testpoints_ampere=[0, 40, 80, 120],
-            dwell_s=2.0,
-            sample_per_point=1,
-            sample_interval_s=3.0,
-            export_csv_path=f"test_cycle_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        )
-        ref_values = []
-        for i in range(len(y)):
-            ref_values.append(float_to_uint16(y[i]))
-        
-        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], ref_values)
-        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], count=len(ref_values), device_id=PCB_MODBUS_PARAMETERS['devId'])
+        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], ref_values_stack1_u16)
+        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S2_PCB_Value_1"], ref_values_stack2_u16)
+        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], count=len(ref_values_stack1_u16), device_id=PCB_MODBUS_PARAMETERS['devId'])
         ref_values_read = ref_values_read.registers
-        print("Reference values written to PCB and read back:")
-        for i in range(len(ref_values)):
-            print(f"Ref {y[i]:.7f} A -> UInt16: {ref_values[i]} -> Read back: {ref_values_read[i]}")
+        for i in range(len(ref_values_stack1_u16)):
+            print(f"Addr {PCB_REG_NAME_TO_ADDRESS['S1_PCB_Value_1'] + i}: {ref_values_read[i]}")
             
+        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S2_PCB_Value_1"], count=len(ref_values_stack2_u16), device_id=PCB_MODBUS_PARAMETERS['devId'])
+        ref_values_read = ref_values_read.registers
+        for i in range(len(ref_values_stack2_u16)):
+            print(f"Addr {PCB_REG_NAME_TO_ADDRESS['S2_PCB_Value_1'] + i}: {ref_values_read[i]}")
+        pcbClient.write_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], values=[1], device_id=PCB_MODBUS_PARAMETERS['devId'])
+        value_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=PCB_MODBUS_PARAMETERS['devId'])
+        print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
         # run_sweep(
         #     curr_start=0,
         #     curr_end=120,
