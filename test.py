@@ -2,11 +2,11 @@
 import time
 
 from matplotlib.pylab import int16, uint16
-from geraete import classes,IDs
+from geraete import IDs, deviceInterfaces
 import csv
 from datetime import datetime
 from geraete.scpi_errors import SCPIError, SCPIErrorEntry, parse_scpi_error
-from pcb_constants import PCB_MB_REGISTERS, PCB_PARAM
+from board_constants import BOARD_MB_REGISTERS, BOARD_PARAM
 
 # bits = 2**15
 # bit_value_pos = 250/(bits-1)
@@ -16,9 +16,9 @@ from pcb_constants import PCB_MB_REGISTERS, PCB_PARAM
 # x = 250.0
 def float_to_uint16(value: float) -> uint16:
     if value >= 0:
-        x = round(value/(PCB_PARAM["RANGE"]/(PCB_PARAM["ADC_RES_HALF"]-1)))
+        x = round(value/(BOARD_PARAM["RANGE"]/(BOARD_PARAM["ADC_RES_HALF"]-1)))
     else:
-        x = (value + 2*PCB_PARAM["RANGE"]) / (PCB_PARAM["RANGE"]/PCB_PARAM["ADC_RES_HALF"])    
+        x = (value + 2*BOARD_PARAM["RANGE"]) / (BOARD_PARAM["RANGE"]/BOARD_PARAM["ADC_RES_HALF"])    
     x = uint16(x)
     return x
 

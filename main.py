@@ -7,42 +7,48 @@ import time
 import argparse
 
 from numpy import int16, uint16
-from geraete import classes,IDs
+from geraete import IDs, deviceInterfaces
 import csv
 from datetime import datetime
 from pymodbus.client.serial import ModbusSerialClient
-from pcb_constants import PCB_MODBUS_PARAMETERS, PCB_MB_REGISTERS, PCB_PARAM, PCB_REG_NAME_TO_ADDRESS, PCB_REG_ADRESS_TO_NAME, PCB_NAME_MULT
+from board_constants import BOARD_MODBUS_PARAMETERS, BOARD_MB_REGISTERS, BOARD_PARAM, BOARD_REG_NAME_TO_ADDRESS, BOARD_REG_ADRESS_TO_NAME, BOARD_NAME_MULT
 
-hw_variants = [
+HW_VARIANTS = [
     "S1_Pos",
     "S1_Neg",
     "S2_Pos", 
     "S2_Neg",
 ]
 
-CURRENT_SETPOINTS = []
+CURRENT_SETPOINTS = [0., 40., 80., 120.]
 
-dmm = classes.rigol_dmm(IDs.RIGOL_DMM_IP)
+TEST_PARAMETERS = {
+    "dwell_s": 3.0,
+    "sample_per_point": 3,
+    "sample_interval_s": 1.0,
+}
+
+dmm = deviceInterfaces.rigol_dmm(IDs.RIGOL_DMM_IP)
 dmm.setup()
-ps = classes.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
+ps = deviceInterfaces.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
 ps.setup()
-el = classes.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
+el = deviceInterfaces.ea_el(IDs.EA_EL_IP,IDs.EA_EL_PORT)
 el.setup()
-pcbClient = ModbusSerialClient(
-    port=PCB_MODBUS_PARAMETERS['USBPort'], 
-    baudrate=PCB_MODBUS_PARAMETERS['baudrate'], 
-    bytesize=PCB_MODBUS_PARAMETERS['bytesize'], 
-    parity=PCB_MODBUS_PARAMETERS['parity'], 
-    stopbits=PCB_MODBUS_PARAMETERS['stopbits'], 
-    timeout=PCB_MODBUS_PARAMETERS['timeout']
+boardClient = ModbusSerialClient(
+    port=BOARD_MODBUS_PARAMETERS['USBPort'], 
+    baudrate=BOARD_MODBUS_PARAMETERS['baudrate'], 
+    bytesize=BOARD_MODBUS_PARAMETERS['bytesize'], 
+    parity=BOARD_MODBUS_PARAMETERS['parity'], 
+    stopbits=BOARD_MODBUS_PARAMETERS['stopbits'], 
+    timeout=BOARD_MODBUS_PARAMETERS['timeout']
     )
-pcbClient.connect()
+boardClient.connect()
 
 def float_to_uint16(value: float) -> uint16:
     if value >= 0:
-        x = round(value/(PCB_PARAM["RANGE"]/(PCB_PARAM["ADC_RES_HALF"]-1)))
+        x = round(value/(BOARD_PARAM["RANGE"]/(BOARD_PARAM["ADC_RES_HALF"]-1)))
     else:
-        x = (value + 2*PCB_PARAM["RANGE"]) / (PCB_PARAM["RANGE"]/PCB_PARAM["ADC_RES_HALF"])    
+        x = (value + 2*BOARD_PARAM["RANGE"]) / (BOARD_PARAM["RANGE"]/BOARD_PARAM["ADC_RES_HALF"])    
     x = uint16(x)
     return x
 
@@ -98,9 +104,9 @@ def run_test_cycle(
     :type export_csv_path: str | None
     """
     results = []
-    pcb_and_ref_values = {}
-    mb_reg_start = PCB_REG_NAME_TO_ADDRESS["Voltage_S1"]
-    mb_reg_end = PCB_REG_NAME_TO_ADDRESS["Voltage_ocv"]
+    board_and_ref_values = {}
+    mb_reg_start = BOARD_REG_NAME_TO_ADDRESS["Voltage_S1"]
+    mb_reg_end = BOARD_REG_NAME_TO_ADDRESS["Voltage_ocv"]
     mb_reg_count = mb_reg_end - mb_reg_start + 1
     first = True
 
@@ -115,7 +121,7 @@ def run_test_cycle(
 
     for set_current in testpoints_ampere:  
         current_key = get_current_key(hw_variant, set_current)
-        samples_pcb_current = []
+        samples_board_current = []
         samples_ref_current = []
         # load defines maximum current
         if set_current < 0 or set_current > el.CURR_MAX:
@@ -130,14 +136,14 @@ def run_test_cycle(
         for _ in range(sample_per_point):
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             meas_volt = dmm.meas_volt_dc() - zero_offset
-            calc_curr = meas_volt / PCB_PARAM["R_SHUNT"]
-            read_reg_values = pcbClient.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=PCB_MODBUS_PARAMETERS['devId'])
+            calc_curr = meas_volt / BOARD_PARAM["R_SHUNT"]
+            read_reg_values = boardClient.read_holding_registers(address=mb_reg_start, count=mb_reg_count, device_id=BOARD_MODBUS_PARAMETERS['devId'])
             read_reg_values = read_reg_values.registers
             modbus_values = {}
             for address in range(mb_reg_start, mb_reg_end + 1):
-                reg_mult = PCB_MB_REGISTERS[address].get("multiplicator")
-                reg_name = PCB_MB_REGISTERS[address].get("name")
-                reg_value = int16(uint16(read_reg_values[address - mb_reg_start]))*reg_mult # type: ignore
+                reg_factor = BOARD_MB_REGISTERS[address].get("factor")
+                reg_name = BOARD_MB_REGISTERS[address].get("name")
+                reg_value = int16(uint16(read_reg_values[address - mb_reg_start]))*reg_factor # type: ignore
                 modbus_values[reg_name] = reg_value
             row = {
                 "timestamp": ts,
@@ -148,14 +154,14 @@ def run_test_cycle(
             row.update(modbus_values)
             results.append(row)
             samples_ref_current.append(calc_curr)
-            samples_pcb_current.append(modbus_values[current_key])
+            samples_board_current.append(modbus_values[current_key])
 
             print(f"{ts} | set {set_current:.2f} A | U = {meas_volt:.7f} V | I = {calc_curr:.5f} A")
             time.sleep(sample_interval_s)
         
         mean_ref = my_mean(samples_ref_current)
-        mean_pcb = my_mean(samples_pcb_current)
-        pcb_and_ref_values[set_current] = [mean_pcb, mean_ref]      
+        mean_board = my_mean(samples_board_current)
+        board_and_ref_values[set_current] = [mean_board, mean_ref]      
 
     output_off_zero()
     if export_csv_path:
@@ -165,7 +171,7 @@ def run_test_cycle(
             writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
             writer.writeheader()
             writer.writerows(results)
-    return results, pcb_and_ref_values
+    return results, board_and_ref_values
 
 def my_mean(values:list[float]) -> float:
     return sum(values)/len(values) if values else 0.0
@@ -312,23 +318,23 @@ def parse_args():
 
     return parser.parse_args()
 
-def ref_to_pcb(start_adress:int, values:list[uint16]):
-    pcbClient.write_registers(address=start_adress, values=values, device_id=PCB_MODBUS_PARAMETERS['devId'])
+def ref_to_board(start_adress:int, values:list[uint16]):
+    boardClient.write_registers(address=start_adress, values=values, device_id=BOARD_MODBUS_PARAMETERS['devId'])
     return 0
 
-def run_test_with_user_steps():
+def run_multiple_tests():
     ref_values_stack1 = {}
     ref_values_stack2 = {}
-    for run_index, variant in enumerate(hw_variants, start=1):
+    for run_index, variant in enumerate(HW_VARIANTS, start=1):
         print(f"\n===== TESTCYCLE {run_index}/4 =====")
         wait_for_user_confirmation(variant)
         _, ref_values = run_test_cycle(
-            testpoints_ampere=[0, 40, 80, 120],
+            testpoints_ampere=CURRENT_SETPOINTS,
             hw_variant=variant,
-            dwell_s=2.0,
-            sample_per_point=2,
-            sample_interval_s=1.0,
-            export_csv_path=f"test_cycle_run_{hw_variants[run_index-1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            dwell_s=TEST_PARAMETERS["dwell_s"],
+            sample_per_point=TEST_PARAMETERS["sample_per_point"],
+            sample_interval_s=TEST_PARAMETERS["sample_interval_s"],
+            #export_csv_path=f"test_cycle_run_{HW_VARIANTS[run_index-1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
         if run_index % 2 == 0:
             ref_values_corr = {}
@@ -343,9 +349,17 @@ def run_test_with_user_steps():
 def refs_sorted_to_u16_list(refs_signed: dict) -> list[uint16]:
     out: list[uint16] = []
     for set_i in sorted(refs_signed.keys()):
-        ref_mean, pcb_mean = refs_signed[set_i]
+        ref_mean, board_mean = refs_signed[set_i]
         out.append(float_to_uint16(ref_mean))
-        out.append(float_to_uint16(pcb_mean))
+        out.append(float_to_uint16(board_mean))
+    return out
+
+def refs_sorted_to_float_list(refs_unsigned: dict) -> list[float]:
+    out: list[float] = []
+    for set_i in sorted(refs_unsigned.keys()):
+        ref_mean, board_mean = refs_unsigned[set_i]
+        out.append(ref_mean)
+        out.append(board_mean)
     return out
 
 def main():
@@ -376,13 +390,45 @@ def main():
         #         export_csv_path=f"sweep_{timestamp}.csv"
         #     )
         # """
-        value_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=PCB_MODBUS_PARAMETERS['devId'])
-        print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
-        ref_values_stack1, ref_values_stack2 = run_test_with_user_steps()
-        ref_values_stack1_u16 = refs_sorted_to_u16_list(ref_values_stack1)
-        ref_values_stack2_u16 = refs_sorted_to_u16_list(ref_values_stack2)
-        print("Reference values stack 1 (u16):", ref_values_stack1_u16)
-        print("Reference values stack 2 (u16):", ref_values_stack2_u16)
+        # value_read = boardClient.read_holding_registers(address=BOARD_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=BOARD_MODBUS_PARAMETERS['devId'])
+        # print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
+        ref_values_stack1, ref_values_stack2 = run_multiple_tests()
+        
+        fieldnames = ["set_current_a", "board1_current_a", "ref1_current_a", "board2_current_a", "ref2_current_a"]
+        with open(f"ref_values_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
+            writer.writeheader()
+            for set_i in sorted(ref_values_stack1.keys()):
+                board_mean1, ref_mean1 = ref_values_stack1[set_i]
+                writer.writerow({
+                    "set_current_a": f"{set_i:.2f}",
+                    "board1_current_a": f"{board_mean1:.7f}",
+                    "ref1_current_a": f"{ref_mean1:.7f}",
+                })
+            for set_i in sorted(ref_values_stack2.keys()):
+                board_mean2, ref_mean2 = ref_values_stack2[set_i]
+                writer.writerow({
+                    "board2_current_a": f"{board_mean2:.7f}",
+                    "ref2_current_a": f"{ref_mean2:.7f}",
+                })
+
+
+        # fieldnames = ["set_current_a", "ref_mean_a", "board_mean_a"]
+        # with open(f"ref_values_stack2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "w", newline="") as handle:
+        #     writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=';')
+        #     writer.writeheader()
+        #     for set_i in sorted(ref_values_stack2.keys()):
+        #         ref_mean, board_mean = ref_values_stack2[set_i]
+        #         writer.writerow({
+        #             "set_current_a": f"{set_i:.2f}",
+        #             "ref_mean_a": f"{ref_mean:.7f}",
+        #             "board_mean_a": f"{board_mean:.7f}",
+        #         })
+
+        # ref_values_stack1_u16 = refs_sorted_to_u16_list(ref_values_stack1)
+        # ref_values_stack2_u16 = refs_sorted_to_u16_list(ref_values_stack2)
+        # print("Reference values stack 1 (u16):", ref_values_stack1_u16)
+        # print("Reference values stack 2 (u16):", ref_values_stack2_u16)
 
         
         # x,y = run_test_cycle(
@@ -398,20 +444,20 @@ def main():
         # for i in range(len(y)):
         #     ref_values.append(float_to_uint16(y[i]))
         
-        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], ref_values_stack1_u16)
-        ref_to_pcb(PCB_REG_NAME_TO_ADDRESS["S2_PCB_Value_1"], ref_values_stack2_u16)
-        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S1_PCB_Value_1"], count=len(ref_values_stack1_u16), device_id=PCB_MODBUS_PARAMETERS['devId'])
-        ref_values_read = ref_values_read.registers
-        for i in range(len(ref_values_stack1_u16)):
-            print(f"Addr {PCB_REG_NAME_TO_ADDRESS['S1_PCB_Value_1'] + i}: {ref_values_read[i]}")
+        # ref_to_board(BOARD_REG_NAME_TO_ADDRESS["S1_BOARD_Value_1"], ref_values_stack1_u16)
+        # ref_to_board(BOARD_REG_NAME_TO_ADDRESS["S2_BOARD_Value_1"], ref_values_stack2_u16)
+        # ref_values_read = boardClient.read_holding_registers(address=BOARD_REG_NAME_TO_ADDRESS["S1_BOARD_Value_1"], count=len(ref_values_stack1_u16), device_id=BOARD_MODBUS_PARAMETERS['devId'])
+        # ref_values_read = ref_values_read.registers
+        # for i in range(len(ref_values_stack1_u16)):
+        #     print(f"Addr {BOARD_REG_NAME_TO_ADDRESS['S1_BOARD_Value_1'] + i}: {ref_values_read[i]}")
             
-        ref_values_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["S2_PCB_Value_1"], count=len(ref_values_stack2_u16), device_id=PCB_MODBUS_PARAMETERS['devId'])
-        ref_values_read = ref_values_read.registers
-        for i in range(len(ref_values_stack2_u16)):
-            print(f"Addr {PCB_REG_NAME_TO_ADDRESS['S2_PCB_Value_1'] + i}: {ref_values_read[i]}")
-        pcbClient.write_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], values=[1], device_id=PCB_MODBUS_PARAMETERS['devId'])
-        value_read = pcbClient.read_holding_registers(address=PCB_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=PCB_MODBUS_PARAMETERS['devId'])
-        print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
+        # ref_values_read = boardClient.read_holding_registers(address=BOARD_REG_NAME_TO_ADDRESS["S2_BOARD_Value_1"], count=len(ref_values_stack2_u16), device_id=BOARD_MODBUS_PARAMETERS['devId'])
+        # ref_values_read = ref_values_read.registers
+        # for i in range(len(ref_values_stack2_u16)):
+        #     print(f"Addr {BOARD_REG_NAME_TO_ADDRESS['S2_BOARD_Value_1'] + i}: {ref_values_read[i]}")
+        # boardClient.write_registers(address=BOARD_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], values=[1], device_id=BOARD_MODBUS_PARAMETERS['devId'])
+        # value_read = boardClient.read_holding_registers(address=BOARD_REG_NAME_TO_ADDRESS["MB_CURRENT_CALIBRATED"], count=1, device_id=BOARD_MODBUS_PARAMETERS['devId'])
+        # print(f"Value read from MB_CURRENT_CALIBRATED: {value_read.registers[0]}")
         # run_sweep(
         #     curr_start=0,
         #     curr_end=120,

@@ -1,6 +1,6 @@
 import pyvisa
 import time
-from geraete import classes,IDs
+from geraete import IDs, deviceInterfaces
 
 # rm = pyvisa.ResourceManager('@py')
 
@@ -9,7 +9,7 @@ def main():
     # time.sleep(2)
     # info = dmm.identify()
     # print(info)
-    ps = classes.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
+    ps = deviceInterfaces.ea_ps(IDs.EA_PS_IP,IDs.EA_PS_PORT)
     # ps.setup()
     ps.preset_zero()
     print("Set current:", ps.query_scpi("CURR?"))
